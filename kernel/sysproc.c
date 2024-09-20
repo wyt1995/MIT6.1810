@@ -91,3 +91,15 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_trace(void)
+{
+    // retrieve system call argument
+    int mask;
+    argint(0, &mask);
+
+    // set parent process trace mask for child to copy
+    myproc()->tracemask = mask;
+    return 0;
+}
