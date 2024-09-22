@@ -8,7 +8,7 @@
 void sieve(int[2]) __attribute__((noreturn));
 
 void sieve(int left[2]) {
-    int prime;
+    int prime, num;
     close(left[WR]);
 
     // read the first number; if no more left, close the pipe and exit
@@ -34,7 +34,6 @@ void sieve(int left[2]) {
         close(right[RD]);
 
         // read number from the left pipe, write to right only if not divisible
-        int num;
         while (read(left[RD], &num, sizeof(int)) > 0) {
             if (num % prime) {
                 write(right[WR], &num, sizeof(int));
