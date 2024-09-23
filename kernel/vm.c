@@ -10,6 +10,7 @@
 
 /*
  * the kernel's page table.
+ * a pointer to pte_t (64-bit integer)
  */
 pagetable_t kernel_pagetable;
 
@@ -23,6 +24,7 @@ kvmmake(void)
 {
   pagetable_t kpgtbl;
 
+  // allocate one page of kernel page table
   kpgtbl = (pagetable_t) kalloc();
   memset(kpgtbl, 0, PGSIZE);
 
@@ -95,25 +97,34 @@ kvminithart()
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
-  if(va >= MAXVA)
+  if (va >= MAXVA)
     panic("walk");
 
-  for(int level = 2; level > 0; level--) {
+  for (int level = 2; level > 0; level--) {
+    // Each page directory has 2^9 entries. PX extracts 9 bits to index into the page table.
+    // adding this index as an offset to pagetable returns the value of a PTE.
     pte_t *pte = &pagetable[PX(level, va)];
-    if(*pte & PTE_V) {
+
+    // if valid, convert to a physical address, which is the next level page directory
+    if (*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
 #ifdef LAB_PGTBL
-      if(PTE_LEAF(*pte)) {
+      if (PTE_LEAF(*pte)) {
         return pte;
       }
 #endif
-    } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+    }
+
+    // otherwise, create page table page along the way
+    else {
+      if (!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
+
+  // last-level page table, return the physical address of the requested virtual address
   return &pagetable[PX(0, va)];
 }
 
@@ -176,8 +187,11 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
+    // if already valid, exit immediately
     if(*pte & PTE_V)
       panic("mappages: remap");
+
+    // set PTE flags
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;

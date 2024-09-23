@@ -33,6 +33,7 @@ kinit()
 void
 freerange(void *pa_start, void *pa_end)
 {
+  // round up to the smallest multiple of 4096
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
