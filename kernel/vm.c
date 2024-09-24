@@ -503,8 +503,35 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 #ifdef LAB_PGTBL
 void
+vmprint_helper(pagetable_t pagetable, uint64 base, int depth) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+
+    // skip if not valid
+    if ((pte & PTE_V) == 0) {
+      continue;
+    }
+
+    // print entry in the current level
+    uint64 offset = i << ((3 - depth) * 9 + PGSHIFT);
+    uint64 va = base + offset;
+    uint64 pa = PTE2PA(pte);
+    for (int j = 0; j < depth; j++) {
+      printf(" ..");
+    }
+    printf("%p: pte %p p %p\n", (void *)va, (void *)pte, (void *)pa);
+
+    // recurse if this PTE points to a lower-level page table
+    if (PTE_LEAF(pte) == 0) {
+      vmprint_helper((pagetable_t) pa, va, depth + 1);
+    }
+  }
+}
+
+void
 vmprint(pagetable_t pagetable) {
-  // your code here
+  printf("page table %p\n", pagetable);
+  vmprint_helper(pagetable, 0, 1);
 }
 #endif
 
