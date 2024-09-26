@@ -280,15 +280,29 @@ userinit(void)
 int
 growproc(int n)
 {
-  uint64 sz;
   struct proc *p = myproc();
+  uint64 sz = p->sz;
+  uint64 newsz;
+  uint64 spgnum = n / SUPERPGSIZE;
 
-  sz = p->sz;
-  if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+  // super page, need to be 2-megabyte aligned
+  while (spgnum > 0) {
+    if ((sz = uvmalloc(p->pagetable, sz, SUPERPGROUNDUP(sz), PTE_W)) == 0) {
       return -1;
     }
-  } else if(n < 0){
+    if ((newsz = uvmalloc_super(p->pagetable, sz, sz + SUPERPGSIZE, PTE_W)) == 0) {
+      break;
+    }
+    sz = newsz;
+    n -= SUPERPGSIZE;
+    spgnum -= 1;
+  }
+
+  if (n > 0) {
+    if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+      return -1;
+    }
+  } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;

@@ -9,7 +9,7 @@
 #include "riscv.h"
 #include "defs.h"
 
-#define SUPERPGNUM 5
+#define SUPERPGNUM 8
 #define SUPERPGMEM (SUPERPGSIZE * SUPERPGNUM)
 
 void freerange(void *pa_start, void *pa_end);
@@ -107,7 +107,9 @@ kalloc(void)
 }
 
 // Allocate one 2-megabyte page of physical memory.
-void *superalloc(void) {
+void *
+superalloc(void)
+{
   struct run *r;
 
   acquire(&kmem.lock);
