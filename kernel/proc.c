@@ -282,29 +282,39 @@ growproc(int n)
 {
   struct proc *p = myproc();
   uint64 sz = p->sz;
+  uint64 oldsz = sz;
   uint64 newsz;
   uint64 spgnum = n / SUPERPGSIZE;
 
-  // super page, need to be 2-megabyte aligned
-  while (spgnum > 0) {
-    if ((sz = uvmalloc(p->pagetable, sz, SUPERPGROUNDUP(sz), PTE_W)) == 0) {
-      return -1;
+  if (n > 0) {
+    // super page, need to be 2-megabyte aligned
+    if (spgnum > 0 && sz < SUPERPGROUNDUP(sz)) {
+      if ((newsz = uvmalloc(p->pagetable, sz, SUPERPGROUNDUP(sz), PTE_W)) == 0) {
+        return -1;
+      }
+      sz = newsz;
     }
-    if ((newsz = uvmalloc_super(p->pagetable, sz, sz + SUPERPGSIZE, PTE_W)) == 0) {
-      break;
+    while (spgnum > 0) {
+      if ((newsz = uvmalloc_super(p->pagetable, sz, sz + SUPERPGSIZE, PTE_W)) == 0) {
+        break;
+      }
+      sz = newsz;
+      spgnum -= 1;
+    }
+
+    // ordinary memory pages, also used as fallback
+    if ((newsz = uvmalloc(p->pagetable, sz, oldsz + n, PTE_W)) == 0) {
+      // if failed, roll back any allocated pages
+      uvmdealloc(p->pagetable, sz, oldsz);
+      return -1;
     }
     sz = newsz;
-    n -= SUPERPGSIZE;
-    spgnum -= 1;
   }
 
-  if (n > 0) {
-    if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
-      return -1;
-    }
-  } else if (n < 0) {
+  else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
+
   p->sz = sz;
   return 0;
 }
