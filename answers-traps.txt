@@ -1,0 +1,6 @@
+registers a0-a7 hold function arguments. For printf, 13 is the third argument, which goes to a2.
+0x26, 0x14
+0x06bc
+0x34
+He110 World (little endian); He110 Wodlr (big endian) -> 0x726c6400
+printf uses the current value stored in register a2
