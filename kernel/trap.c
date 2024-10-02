@@ -29,6 +29,10 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+// lab traps: alarm
+void save_trapframe(struct proc *);
+void restore_trapframe(struct proc *);
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -77,8 +81,24 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if (which_dev == 2) {
+    // if the alarm interval is set, count the tick of CPU times
+    if (p->alarm_interval) {
+      p->passed_ticks += 1;
+      if (p->passed_ticks == p->alarm_interval && p->allow_entrant) {
+        // prevent other calls to the handler before sigreturn
+        p->allow_entrant = 0;
+
+        // back up trap frame (user state), and jump to the alarm handler by setting epc
+        save_trapframe(p);
+        p->trapframe->epc = (uint64) p->alarm_handler;
+
+        // restart the tick counting
+        p->passed_ticks = 0;
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
@@ -216,3 +236,95 @@ devintr()
   }
 }
 
+int
+sigalarm(int ticks, uint64 handler)
+{
+  struct proc *p = myproc();
+  p->alarm_interval = ticks;
+  p->alarm_handler = handler;
+  return 0;
+}
+
+// user alarm handlers are required to make a sigreturn system call
+// when they have finished
+int
+sigreturn()
+{
+  struct proc *p = myproc();
+  restore_trapframe(p);
+  p->allow_entrant = 1;
+  return p->trapframe->a0;
+}
+
+void
+save_trapframe(struct proc *p)
+{
+  p->alarm_frame.epc = p->trapframe->epc;
+  p->alarm_frame.ra = p->trapframe->ra;
+  p->alarm_frame.sp = p->trapframe->sp;
+  p->alarm_frame.gp = p->trapframe->gp;
+  p->alarm_frame.tp = p->trapframe->tp;
+  p->alarm_frame.t0 = p->trapframe->t0;
+  p->alarm_frame.t1 = p->trapframe->t1;
+  p->alarm_frame.t2 = p->trapframe->t2;
+  p->alarm_frame.s0 = p->trapframe->s0;
+  p->alarm_frame.s1 = p->trapframe->s1;
+  p->alarm_frame.a0 = p->trapframe->a0;
+  p->alarm_frame.a1 = p->trapframe->a1;
+  p->alarm_frame.a2 = p->trapframe->a2;
+  p->alarm_frame.a3 = p->trapframe->a3;
+  p->alarm_frame.a4 = p->trapframe->a4;
+  p->alarm_frame.a5 = p->trapframe->a5;
+  p->alarm_frame.a6 = p->trapframe->a6;
+  p->alarm_frame.a7 = p->trapframe->a7;
+  p->alarm_frame.s2 = p->trapframe->s2;
+  p->alarm_frame.s3 = p->trapframe->s3;
+  p->alarm_frame.s4 = p->trapframe->s4;
+  p->alarm_frame.s5 = p->trapframe->s5;
+  p->alarm_frame.s6 = p->trapframe->s6;
+  p->alarm_frame.s7 = p->trapframe->s7;
+  p->alarm_frame.s8 = p->trapframe->s8;
+  p->alarm_frame.s9 = p->trapframe->s9;
+  p->alarm_frame.s10 = p->trapframe->s10;
+  p->alarm_frame.s11 = p->trapframe->s11;
+  p->alarm_frame.t3 = p->trapframe->t3;
+  p->alarm_frame.t4 = p->trapframe->t4;
+  p->alarm_frame.t5 = p->trapframe->t5;
+  p->alarm_frame.t6 = p->trapframe->t6;
+}
+
+void
+restore_trapframe(struct proc *p)
+{
+  p->trapframe->epc = p->alarm_frame.epc;
+  p->trapframe->ra = p->alarm_frame.ra;
+  p->trapframe->sp = p->alarm_frame.sp;
+  p->trapframe->gp = p->alarm_frame.gp;
+  p->trapframe->tp = p->alarm_frame.tp;
+  p->trapframe->t0 = p->alarm_frame.t0;
+  p->trapframe->t1 = p->alarm_frame.t2;
+  p->trapframe->s0 = p->alarm_frame.s0;
+  p->trapframe->s1 = p->alarm_frame.s1;
+  p->trapframe->a0 = p->alarm_frame.a0;
+  p->trapframe->a1 = p->alarm_frame.a1;
+  p->trapframe->a2 = p->alarm_frame.a2;
+  p->trapframe->a3 = p->alarm_frame.a3;
+  p->trapframe->a4 = p->alarm_frame.a4;
+  p->trapframe->a5 = p->alarm_frame.a5;
+  p->trapframe->a6 = p->alarm_frame.a6;
+  p->trapframe->a7 = p->alarm_frame.a7;
+  p->trapframe->s2 = p->alarm_frame.s2;
+  p->trapframe->s3 = p->alarm_frame.s3;
+  p->trapframe->s4 = p->alarm_frame.s4;
+  p->trapframe->s5 = p->alarm_frame.s5;
+  p->trapframe->s6 = p->alarm_frame.s6;
+  p->trapframe->s7 = p->alarm_frame.s7;
+  p->trapframe->s8 = p->alarm_frame.s8;
+  p->trapframe->s9 = p->alarm_frame.s9;
+  p->trapframe->s10 = p->alarm_frame.s10;
+  p->trapframe->s11 = p->alarm_frame.s11;
+  p->trapframe->t3 = p->alarm_frame.t3;
+  p->trapframe->t4 = p->alarm_frame.t4;
+  p->trapframe->t5 = p->alarm_frame.t5;
+  p->trapframe->t6 = p->alarm_frame.t6;
+}

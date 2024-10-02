@@ -104,4 +104,11 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // alarm system call: periodically alerts a process as it uses CPU time
+  uint64 alarm_handler;        // alarm handler function address
+  int alarm_interval;          // after every n ticks of CPU, the kernel calls the alarm handler
+  int passed_ticks;            // keep track of how many ticks have passed since the last call
+  int allow_entrant;           // prevent re-entrant calls to the handler
+  struct trapframe alarm_frame;
 };
