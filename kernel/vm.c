@@ -315,20 +315,25 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
-  for(i = 0; i < sz; i += PGSIZE){
+  for (i = 0; i < sz; i += PGSIZE) {
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+
+    // copy on write
+    if (*pte & PTE_W) {
+      *pte = (*pte & (~PTE_W)) | PTE_COW;
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+
+    // increment the page's reference count
+    ref_count_incr((char*) pa);
+
+    // map new process's page table to the same physical address
+    if (mappages(new, i, PGSIZE, pa, flags) != 0) {
       goto err;
     }
   }
@@ -337,6 +342,42 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+}
+
+// allocate a new physical page for copy-on-write,
+// and copy the old page to the new page.
+// return -1 if virtual address is illegal or there is no free memory.
+int
+uvmcopy_cow(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+  uint flags;
+  char *mem;
+
+  if (va >= MAXVA)
+    return -1;
+  if ((pte = walk(pagetable, va, 0)) == 0)
+    return -1;
+  if ((*pte & PTE_V) == 0 || (*pte & PTE_COW) == 0)
+    return -1;
+
+  // shared physical page address
+  pa = PTE2PA(*pte);
+  flags = (PTE_FLAGS(*pte) | PTE_W) & ~PTE_COW;
+
+  // allocate a new page for writing
+  if ((mem = kalloc()) == 0) {
+    return -1;
+  }
+  memmove(mem, (char*) pa, PGSIZE);
+  kfree((char*) pa);
+  uvmunmap(pagetable, PGROUNDDOWN(va), 1, 0);
+  if ((mappages(pagetable, PGROUNDDOWN(va), PGSIZE, (uint64) mem, flags)) != 0) {
+    kfree(mem);
+    return -1;
+  }
+  return 0;
 }
 
 // mark a PTE invalid for user access.
@@ -361,13 +402,20 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   uint64 n, va0, pa0;
   pte_t *pte;
 
-  while(len > 0){
+  while (len > 0) {
     va0 = PGROUNDDOWN(dstva);
-    if(va0 >= MAXVA)
+    if (va0 >= MAXVA)
       return -1;
-    pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
-       (*pte & PTE_W) == 0)
+    if ((pte = walk(pagetable, va0, 0)) == 0)
+      return -1;
+
+    // handle copy-on-write
+    if (*pte & PTE_COW) {
+      if (uvmcopy_cow(pagetable, va0) != 0)
+        return -1;
+    }
+
+    if ((*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_W) == 0)
       return -1;
     pa0 = PTE2PA(*pte);
     n = PGSIZE - (dstva - va0);
