@@ -23,6 +23,13 @@ struct {
   struct run *freelist;
 } kmem;
 
+// copy-on-write: reference count array
+// for each physical page, maintain the number of page tables that refer to that page
+#define REF_SIZE     ((PHYSTOP - KERNBASE) >> PGSHIFT)
+#define REF_IDX(pa)  (((uint64) pa - KERNBASE) >> PGSHIFT)
+int ref_counts[REF_SIZE];
+struct spinlock ref_lock;
+
 void
 kinit()
 {
@@ -35,8 +42,10 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for (; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
+    ref_counts[REF_IDX(p)] = 1;
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by pa,
@@ -50,6 +59,14 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  if (ref_counts[REF_IDX(pa)] < 0)
+    panic("kfree reference count");
+
+  // free physical page only if its reference count becomes 0
+  ref_count_decr(pa);
+  if (ref_counts[REF_IDX(pa)] > 0)
+    return;
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -72,11 +89,30 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if (r) {
     kmem.freelist = r->next;
+  }
   release(&kmem.lock);
 
-  if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
+  if (r) {
+    memset((char *) r, 5, PGSIZE); // fill with junk
+    ref_counts[REF_IDX(r)] = 1;
+  }
   return (void*)r;
+}
+
+void
+ref_count_incr(void *pa)
+{
+  acquire(&ref_lock);
+  ref_counts[REF_IDX(pa)] += 1;
+  release(&ref_lock);
+}
+
+void
+ref_count_decr(void *pa)
+{
+  acquire(&ref_lock);
+  ref_counts[REF_IDX(pa)] -= 1;
+  release(&ref_lock);
 }
