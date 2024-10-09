@@ -101,8 +101,26 @@ e1000_transmit(char *buf, int len)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after send completes.
   //
+  acquire(&e1000_lock);
 
-  
+  uint32 idx = regs[E1000_TDT];
+  if (!(tx_ring[idx].status & E1000_TXD_STAT_DD)) {
+    release(&e1000_lock);
+    return -1;
+  }
+  if (tx_bufs[idx]) {
+    kfree(tx_bufs[idx]);
+    tx_bufs[idx] = 0;
+  }
+
+  tx_ring[idx].addr = (uint64) buf;
+  tx_ring[idx].length = len;
+  tx_ring[idx].cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  tx_bufs[idx] = buf;
+
+  regs[E1000_TDT] = (regs[E1000_TDT] + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
   return 0;
 }
 
@@ -116,6 +134,18 @@ e1000_recv(void)
   // Create and deliver a buf for each packet (using net_rx()).
   //
 
+  while (1) {
+    uint32 idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    if (!(rx_ring[idx].status & E1000_RXD_STAT_DD)) {
+      return;
+    }
+    net_rx(rx_bufs[idx], rx_ring[idx].length);
+    rx_bufs[idx] = kalloc();
+    if (!rx_bufs[idx])
+      panic("e1000_rec");
+    rx_ring[idx].addr = (uint64) rx_bufs[idx];
+    regs[E1000_RDT] = idx;
+  }
 }
 
 void
