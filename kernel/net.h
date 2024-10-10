@@ -125,3 +125,18 @@ struct dns_data {
   uint32 ttl;
   uint16 len;
 } __attribute__((packed));
+
+
+#define HDRLEN (sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp))
+
+// UDP packet
+struct packet {
+  char buf[4032];
+  uint32 len;
+  struct packet *next;
+};
+
+struct recvq {
+  struct packet *head;
+  struct packet *tail;
+};

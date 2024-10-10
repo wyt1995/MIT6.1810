@@ -143,7 +143,9 @@ e1000_recv(void)
     rx_bufs[idx] = kalloc();
     if (!rx_bufs[idx])
       panic("e1000_rec");
+    memset(rx_bufs[idx], 0, PGSIZE);
     rx_ring[idx].addr = (uint64) rx_bufs[idx];
+    rx_ring[idx].status = 0;
     regs[E1000_RDT] = idx;
   }
 }

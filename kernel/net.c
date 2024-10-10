@@ -19,10 +19,24 @@ static uint8 host_mac[ETHADDR_LEN] = { 0x52, 0x55, 0x0a, 0x00, 0x02, 0x02 };
 
 static struct spinlock netlock;
 
+struct sock {
+  uint16 local_port;
+  uint16 remote_port;
+  uint32 remote_addr;
+  struct proc *proc;
+  struct spinlock lock;
+  struct recvq queue;
+  uint32 size;
+  struct sock *next;
+};
+
+static struct sock *sockets;
+
 void
 netinit(void)
 {
   initlock(&netlock, "netlock");
+  sockets = 0;
 }
 
 
@@ -34,11 +48,37 @@ netinit(void)
 uint64
 sys_bind(void)
 {
-  //
-  // Your code here.
-  //
+  int port;
+  argint(0, &port);
+  if (port < 0 || port >= (1 << 16))
+    return -1;
 
-  return -1;
+  struct sock *sock, *ptr;
+  if ((sock = (struct sock *) kalloc()) == 0)
+    return -1;
+
+  memset(sock, 0, PGSIZE);
+  sock->local_port = port;
+  sock->size = 0;
+  sock->proc = myproc();
+  initlock(&sock->lock, "socket");
+
+  acquire(&netlock);
+  // check port not being used
+  ptr = sockets;
+  while (ptr) {
+    if (ptr->local_port == port) {
+      release(&netlock);
+      kfree(sock);
+      return -1;
+    }
+    ptr = ptr->next;
+  }
+
+  sock->next = sockets;
+  sockets = sock;
+  release(&netlock);
+  return 0;
 }
 
 //
@@ -49,11 +89,41 @@ sys_bind(void)
 uint64
 sys_unbind(void)
 {
-  //
-  // Optional: Your code here.
-  //
+  int port;
+  argint(0, &port);
+  if (port < 0 || port >= (1 << 16))
+    return -1;
+  if (!sockets)
+    return -1;
 
-  return 0;
+  struct proc *p = myproc();
+  struct sock **pp, *curr;
+  struct packet *pkt, *next;
+
+  acquire(&netlock);
+  pp = &sockets;
+  curr = sockets;
+  while (curr) {
+    if (curr->local_port == port && curr->proc == p) {
+      acquire(&curr->lock);
+      pkt = curr->queue.head;
+      while (pkt) {
+        next = pkt->next;
+        kfree(pkt);
+        pkt = next;
+      }
+      release(&curr->lock);
+
+      *pp = curr->next;
+      kfree(curr);
+      release(&netlock);
+      return 0;
+    }
+    pp = &curr->next;
+    curr = curr->next;
+  }
+  release(&netlock);
+  return -1;
 }
 
 //
@@ -74,9 +144,57 @@ sys_unbind(void)
 uint64
 sys_recv(void)
 {
-  //
-  // Your code here.
-  //
+  int dst_port;
+  uint64 src_addr;
+  uint64 src_port;
+  uint64 buf_addr;
+  int maxlen;
+  struct sock *sock;
+  struct proc *p = myproc();
+
+  argint(0, &dst_port);
+  argaddr(1, &src_addr);
+  argaddr(2, &src_port);
+  argaddr(3, &buf_addr);
+  argint(4, &maxlen);
+
+  acquire(&netlock);
+  sock = sockets;
+  while (sock) {
+    if (sock->local_port == dst_port && sock->proc == p) {
+      release(&netlock);
+      acquire(&sock->lock);
+
+      // if no packets queued, wait until one arrives
+      while (sock->size == 0) {
+        sleep(&sock->queue, &sock->lock);
+      }
+
+      // dequeue the packet
+      struct packet *pkt = sock->queue.head;
+      sock->queue.head = pkt->next;
+      if (sock->queue.head == 0)
+        sock->queue.tail = 0;
+      sock->size -= 1;
+
+      release(&sock->lock);
+
+      int copylen = pkt->len < maxlen ? pkt->len : maxlen;
+
+      // Copy data to user space
+      if (copyout(p->pagetable, buf_addr, pkt->buf, copylen) < 0 ||
+          copyout(p->pagetable, src_addr, (char *) &sock->remote_addr, sizeof(uint32)) < 0 ||
+          copyout(p->pagetable, src_port, (char *) &sock->remote_port, sizeof(uint16)) < 0) {
+        kfree(pkt);
+        return -1;
+      }
+
+      kfree(pkt);
+      return copylen;
+    }
+    sock = sock->next;
+  }
+  release(&netlock);
   return -1;
 }
 
@@ -180,6 +298,53 @@ sys_send(void)
 }
 
 void
+enqueue(struct sock *sock, char *buf, int len, uint32 ip, uint16 rport)
+{
+  struct packet *packet = (struct packet *) kalloc();
+  if (!packet) {
+    kfree(buf);
+    return;
+  }
+
+  memmove(packet->buf, buf + HDRLEN, len);
+  packet->len = len;
+  packet->next = 0;
+  kfree(buf);
+
+  acquire(&sock->lock);
+  if (sock->size == 0) {
+    sock->remote_addr = ip;
+    sock->remote_port = rport;
+    sock->queue.head = packet;
+    sock->queue.tail = packet;
+  } else {
+    sock->queue.tail->next = packet;
+    sock->queue.tail = packet;
+  }
+  sock->size += 1;
+  wakeup(&sock->queue);
+  release(&sock->lock);
+}
+
+void
+sockrecvudp(char *buf, int len, uint32 ip, uint16 rport, uint16 lport)
+{
+  struct sock *ptr;
+  acquire(&netlock);
+  ptr = sockets;
+  while (ptr) {
+    if (ptr->local_port == lport) {
+      release(&netlock);
+      enqueue(ptr, buf, len, ip, rport);
+      return;
+    }
+    ptr = ptr->next;
+  }
+  release(&netlock);
+  kfree(buf);
+}
+
+void
 ip_rx(char *buf, int len)
 {
   // don't delete this printf; make grade depends on it.
@@ -191,7 +356,37 @@ ip_rx(char *buf, int len)
   //
   // Your code here.
   //
-  
+  if (len < HDRLEN)
+    goto fail;
+
+  struct eth *eth = (struct eth *) buf;
+  struct ip *ip = (struct ip *) (eth + 1);
+  struct udp *udp = (struct udp *) (ip + 1);
+  uint32 src_ip;
+  uint16 src_port, dst_port;
+
+  // check ip version and header length
+  if (ip->ip_vhl != ((4 << 4) | (20 >> 2)))
+    goto fail;
+  // does not support fragmented packets
+  if (ntohs(ip->ip_off) != 0)
+    goto fail;
+  // only supports UDP packet
+  if (ip->ip_p != IPPROTO_UDP)
+    goto fail;
+  // only reads packet addressed to the local machine
+  if (ntohl(ip->ip_dst) != local_ip)
+    goto fail;
+
+  len = ntohs(udp->ulen) - sizeof(struct udp);
+  src_ip = ntohl(ip->ip_src);
+  src_port = ntohs(udp->sport);
+  dst_port = ntohs(udp->dport);
+  sockrecvudp(buf, len, src_ip, src_port, dst_port);
+  return;
+
+  fail:
+    kfree(buf);
 }
 
 //
@@ -247,11 +442,9 @@ net_rx(char *buf, int len)
 {
   struct eth *eth = (struct eth *) buf;
 
-  if(len >= sizeof(struct eth) + sizeof(struct arp) &&
-     ntohs(eth->type) == ETHTYPE_ARP){
+  if (len >= sizeof(struct eth) + sizeof(struct arp) && ntohs(eth->type) == ETHTYPE_ARP) {
     arp_rx(buf);
-  } else if(len >= sizeof(struct eth) + sizeof(struct ip) &&
-     ntohs(eth->type) == ETHTYPE_IP){
+  } else if (len >= sizeof(struct eth) + sizeof(struct ip) && ntohs(eth->type) == ETHTYPE_IP) {
     ip_rx(buf, len);
   } else {
     kfree(buf);
