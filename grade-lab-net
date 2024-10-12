@@ -50,6 +50,10 @@ def test_nettest_():
 def test_nettest_():
     r.match('^dns: OK$')
 
+@test(10, "nettest: free", parent=test_nettest)
+def test_nettest_():
+    r.match('^free: OK$')
+
 #@test(10, "answers-net.txt")
 #def test_answers():
 #    # just a simple sanity check, will be graded manually
