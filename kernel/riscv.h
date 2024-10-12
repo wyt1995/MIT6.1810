@@ -179,14 +179,16 @@ static inline uint64
 r_stimecmp()
 {
   uint64 x;
-  asm volatile("csrr %0, stimecmp" : "=r" (x) );
+  // asm volatile("csrr %0, stimecmp" : "=r" (x) );
+  asm volatile("csrr %0, 0x14d" : "=r" (x) );
   return x;
 }
 
 static inline void 
 w_stimecmp(uint64 x)
 {
-  asm volatile("csrw stimecmp, %0" : : "r" (x));
+  // asm volatile("csrw stimecmp, %0" : : "r" (x));
+  asm volatile("csrw 0x14d, %0" : : "r" (x));
 }
 
 // Machine Environment Configuration Register
@@ -194,14 +196,16 @@ static inline uint64
 r_menvcfg()
 {
   uint64 x;
-  asm volatile("csrr %0, menvcfg" : "=r" (x) );
+  // asm volatile("csrr %0, menvcfg" : "=r" (x) );
+  asm volatile("csrr %0, 0x30a" : "=r" (x) );
   return x;
 }
 
 static inline void 
 w_menvcfg(uint64 x)
 {
-  asm volatile("csrw menvcfg, %0" : : "r" (x));
+  //asm volatile("csrw menvcfg, %0" : : "r" (x));
+  asm volatile("csrw 0x30a, %0" : : "r" (x));
 }
 
 // Physical Memory Protection
@@ -310,6 +314,14 @@ r_sp()
   return x;
 }
 
+static inline uint64
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}
+
 // read and write tp, the thread pointer, which xv6 uses to hold
 // this core's hartid (core number), the index into cpus[].
 static inline uint64
@@ -350,6 +362,11 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PGSIZE 4096 // bytes per page
 #define PGSHIFT 12  // bits of offset within a page
 
+#ifdef LAB_PGTBL
+#define SUPERPGSIZE (2 * (1 << 20)) // bytes per page
+#define SUPERPGROUNDUP(sz)  (((sz)+SUPERPGSIZE-1) & ~(SUPERPGSIZE-1))
+#endif
+
 #define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
 #define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
 
@@ -358,6 +375,12 @@ typedef uint64 *pagetable_t; // 512 PTEs
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4) // user can access
+
+
+
+#if defined(LAB_MMAP) || defined(LAB_PGTBL)
+#define PTE_LEAF(pte) (((pte) & PTE_R) | ((pte) & PTE_W) | ((pte) & PTE_X))
+#endif
 
 // shift a physical address to the right place for a PTE.
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
