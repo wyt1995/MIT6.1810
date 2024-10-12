@@ -161,7 +161,7 @@ sys_recv(void)
   acquire(&netlock);
   sock = sockets;
   while (sock) {
-    if (sock->local_port == dst_port && sock->proc == p) {
+    if (sock->local_port == dst_port) {
       release(&netlock);
       acquire(&sock->lock);
 
@@ -300,6 +300,12 @@ sys_send(void)
 void
 enqueue(struct sock *sock, char *buf, int len, uint32 ip, uint16 rport)
 {
+  // Queue is full; drop the packet
+  if (sock->size >= 16) {
+    kfree(buf);
+    return;
+  }
+
   struct packet *packet = (struct packet *) kalloc();
   if (!packet) {
     kfree(buf);
