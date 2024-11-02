@@ -1,0 +1,5 @@
+Suppose (k1, v1) and (k2, v2) will be put into the bucket in the hash table.
+Thread 1 tries to put k1, finds that it is not present, and calls the insert function with the first element of the bucket.
+At the moment, the kernel scheduler switches to thread 2, which finds k2 not in the bucket, and successfully inserts (k2, v2).
+Then, the scheduler switches back to thread 1, which resumes execution of insert. It has no way to know the bucket has been updated, and inserts (k1, v1) to the same location.
+In this case, (k2, v2) was inserted into the hash table by thread 2, but overwritten subsequently by thread 1, resulting in the loss of a key.
