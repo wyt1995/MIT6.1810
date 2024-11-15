@@ -79,21 +79,35 @@ bget(uint dev, uint blockno)
   }
   release(&bcache.hashlock[h]);
 
+  // Check buffer cache in the same bucket again.
+  // After the hash lock is released and before searching for a free buffer,
+  // another thread might have allocated a buffer for the same (dev, blockno),
+  // leading to non-unique buffer for the same disk block and inconsistent file data.
+  acquire(&bcache.lock);
+  for (b = bcache.heads[h].next; b != &bcache.heads[h]; b = b->next) {
+    if(b->dev == dev && b->blockno == blockno){
+      acquire(&bcache.hashlock[h]);
+      b->refcnt++;
+      release(&bcache.hashlock[h]);
+      release(&bcache.lock);
+      acquiresleep(&b->lock);
+      return b;
+    }
+  }
+
   // Not cached.
   // Recycle unused buffer in other buckets.
-  acquire(&bcache.lock);
   int bucket = -1;
   for (int i = 0; i < NBUCKET; i++) {
     acquire(&bcache.hashlock[i]);
     for (b = bcache.heads[i].prev; b != &bcache.heads[i]; b = b->prev) {
       if (b->refcnt == 0) {
-        b->prev->next = b->next;
-        b->next->prev = b->prev;
         bucket = i;
         break;
       }
     }
-    // hold lock if buffer is found
+    // continue to hold lock if buffer is found
+    // so that other threads cannot use this buffer
     if (bucket == -1) {
       release(&bcache.hashlock[i]);
     } else {
@@ -104,21 +118,23 @@ bget(uint dev, uint blockno)
   if (bucket == -1)
     panic("bget: no buffers");
 
+  // move to the new hash bucket
   if (bucket != h) {
+    b->prev->next = b->next;
+    b->next->prev = b->prev;
     release(&bcache.hashlock[bucket]);
     acquire(&bcache.hashlock[h]);
+    b->prev = &bcache.heads[h];
+    b->next = bcache.heads[h].next;
+    bcache.heads[h].next->prev = b;
+    bcache.heads[h].next = b;
   }
 
-  // move to the hash bucket
+  // update block metadata
   b->dev = dev;
   b->blockno = blockno;
   b->valid = 0;
   b->refcnt = 1;
-
-  b->prev = &bcache.heads[h];
-  b->next = bcache.heads[h].next;
-  bcache.heads[h].next->prev = b;
-  bcache.heads[h].next = b;
 
   release(&bcache.hashlock[h]);
   release(&bcache.lock);
