@@ -24,7 +24,7 @@
 #include "buf.h"
 
 #define NBUCKET 13
-#define HASH(n) (n % NBUCKET)
+#define HASH(dev, block) ((dev * 31 + block) % NBUCKET)
 
 struct {
   struct spinlock lock;
@@ -65,7 +65,7 @@ static struct buf*
 bget(uint dev, uint blockno)
 {
   struct buf *b;
-  uint h = HASH(blockno);
+  uint h = HASH(dev, blockno);
 
   // Is the block already cached?
   acquire(&bcache.hashlock[h]);
@@ -82,33 +82,44 @@ bget(uint dev, uint blockno)
   // Not cached.
   // Recycle unused buffer in other buckets.
   acquire(&bcache.lock);
-  int found = 0;
+  int bucket = -1;
   for (int i = 0; i < NBUCKET; i++) {
     acquire(&bcache.hashlock[i]);
     for (b = bcache.heads[i].prev; b != &bcache.heads[i]; b = b->prev) {
       if (b->refcnt == 0) {
-        found = 1;
         b->prev->next = b->next;
         b->next->prev = b->prev;
+        bucket = i;
         break;
       }
     }
-    release(&bcache.hashlock[i]);
-    if (found) break;
+    // hold lock if buffer is found
+    if (bucket == -1) {
+      release(&bcache.hashlock[i]);
+    } else {
+      break;
+    }
   }
-  if (!found)
+
+  if (bucket == -1)
     panic("bget: no buffers");
 
+  if (bucket != h) {
+    release(&bcache.hashlock[bucket]);
+    acquire(&bcache.hashlock[h]);
+  }
+
   // move to the hash bucket
-  acquire(&bcache.hashlock[h]);
   b->dev = dev;
   b->blockno = blockno;
   b->valid = 0;
   b->refcnt = 1;
+
   b->prev = &bcache.heads[h];
   b->next = bcache.heads[h].next;
   bcache.heads[h].next->prev = b;
   bcache.heads[h].next = b;
+
   release(&bcache.hashlock[h]);
   release(&bcache.lock);
 
@@ -149,7 +160,7 @@ brelse(struct buf *b)
 
   releasesleep(&b->lock);
 
-  uint h = HASH(b->blockno);
+  uint h = HASH(b->dev, b->blockno);
   acquire(&bcache.hashlock[h]);
   b->refcnt--;
   if (b->refcnt == 0) {
@@ -177,5 +188,4 @@ bunpin(struct buf *b) {
   b->refcnt--;
   release(&bcache.lock);
 }
-
 
