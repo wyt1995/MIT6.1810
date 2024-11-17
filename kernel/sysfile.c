@@ -602,8 +602,9 @@ uint64
 sys_mmap(void)
 {
   uint64 addr, len;
-  int prot, flags, fd, i;
+  int prot, flags, fd;
   struct proc *p = myproc();
+  struct vma *vma = 0;
   struct file *f;
 
   // read mmap syscall arguments
@@ -622,22 +623,24 @@ sys_mmap(void)
     return -1;
 
   // find vma for memory-mapped file
-  for (i = 0; i < NVMA; i++) {
-    if (p->mmaps[i].valid == 0)
-      break;
-    addr -= p->mmaps[i].len;
+  for (int i = 0; i < NVMA; i++) {
+    if (p->mmaps[i].valid == 0 && vma == 0) {
+      vma = &p->mmaps[i];
+    } else if (p->mmaps[i].valid) {
+      addr -= p->mmaps[i].len;
+    }
   }
-  if (i == NVMA)
+  if (vma == 0)
     return -1;
 
   // update proc struct
-  p->mmaps[i].valid = 1;
-  p->mmaps[i].addr = addr = addr - len;
-  p->mmaps[i].len = len;
-  p->mmaps[i].offset = 0;
-  p->mmaps[i].prot = prot;
-  p->mmaps[i].flags = flags;
-  p->mmaps[i].file = f;
+  vma->valid = 1;
+  vma->addr = addr = addr - len;
+  vma->len = len;
+  vma->offset = 0;
+  vma->prot = prot;
+  vma->flags = flags;
+  vma->file = f;
   filedup(f);    // increase file reference count
 
   return addr;
