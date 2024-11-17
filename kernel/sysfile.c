@@ -523,6 +523,11 @@ mmap_lazy_alloc(uint64 va)
     return -1;
   }
 
+  // mmap write protection
+  if (!(a->prot & PROT_WRITE) && r_scause() == 15) {
+    return -1;
+  }
+
   // allocate physical memory page
   if ((mem = kalloc()) == 0)
     return -1;
@@ -531,8 +536,9 @@ mmap_lazy_alloc(uint64 va)
   // read file from disk to vma
   struct inode *ip = a->file->ip;
   va = PGROUNDDOWN(va);
+  uint n = va - a->addr + a->offset;
   ilock(ip);
-  readi(ip, 0, (uint64) mem, va - a->addr, PGSIZE);
+  readi(ip, 0, (uint64) mem, n, PGSIZE);
   iunlock(ip);
 
   // set vm permission bits
@@ -555,7 +561,7 @@ vmaunmap(pagetable_t pagetable, uint64 va, uint64 len, struct vma *vma)
 {
   uint64 a;
   pte_t *pte;
-  uint off, n;
+  uint n, off, rem;
 
   if((va % PGSIZE) != 0)
     panic("vmaunmap: not aligned");
@@ -574,13 +580,14 @@ vmaunmap(pagetable_t pagetable, uint64 va, uint64 len, struct vma *vma)
       ilock(vma->file->ip);
 
       off = a - vma->addr;
-      if (off < vma->file->ip->size) {
+      rem = vma->file->ip->size - vma->offset;
+      if (off < rem) {
         n = PGSIZE;
-        if (vma->file->ip->size - off < PGSIZE)
-          n = vma->file->ip->size - off;
+        if (rem - off < PGSIZE)
+          n = rem - off;
         if (vma->len - off < n)
           n = vma->len - off;
-        writei(vma->file->ip, 1, a, off, n);
+        writei(vma->file->ip, 1, a, vma->offset + off, n);
       }
       iunlock(vma->file->ip);
       end_op();
@@ -604,6 +611,7 @@ sys_mmap(void)
   if (addr == 0)
     addr = MMAPSTOP;
   argaddr(1, &len);
+  len = PGROUNDUP(len);
   argint(2, &prot);
   argint(3, &flags);
   argint(4, &fd);
@@ -663,8 +671,10 @@ sys_munmap(void)
     fileclose(a->file);
     a->valid = 0;
   } else {
-    if (addr == a->addr)
+    if (addr == a->addr) {
       a->addr += len;
+      a->offset += len;
+    }
     a->len -= len;
   }
 
