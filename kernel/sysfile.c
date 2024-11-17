@@ -627,7 +627,7 @@ sys_mmap(void)
     if (p->mmaps[i].valid == 0 && vma == 0) {
       vma = &p->mmaps[i];
     } else if (p->mmaps[i].valid) {
-      addr -= p->mmaps[i].len;
+      addr = PGROUNDDOWN(p->mmaps[i].addr);
     }
   }
   if (vma == 0)
