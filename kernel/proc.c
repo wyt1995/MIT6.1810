@@ -367,6 +367,12 @@ exit(int status)
   if(p == initproc)
     panic("init exiting");
 
+  // Clear memory-mapped files.
+  for (int i = 0; i < NVMA; i++) {
+    if (p->mmaps[i].valid)
+      vmaunmap(p->pagetable, p->mmaps[i].addr, p->mmaps[i].len, &p->mmaps[i]);
+  }
+
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
