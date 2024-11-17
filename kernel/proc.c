@@ -15,8 +15,9 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
-extern void forkret(void);
 static void freeproc(struct proc *p);
+extern void forkret(void);
+extern void vmaunmap(pagetable_t pagetable, uint64 va, uint64 len, struct vma *vma);
 
 extern char trampoline[]; // trampoline.S
 
@@ -146,6 +147,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  for (int i = 0; i < NVMA; i++) {
+    p->mmaps[i].valid = 0;
+  }
+
   return p;
 }
 
@@ -158,6 +163,10 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  for (int i = 0; i < NVMA; i++) {
+    if (p->mmaps[i].valid)
+      vmaunmap(p->pagetable, p->mmaps[i].addr, p->mmaps[i].len, &p->mmaps[i]);
+  }
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -307,6 +316,13 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  for (i = 0; i < NVMA; i++) {
+    if (p->mmaps[i].valid) {
+      np->mmaps[i] = p->mmaps[i];
+      filedup(p->mmaps[i].file);
+    }
+  }
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 

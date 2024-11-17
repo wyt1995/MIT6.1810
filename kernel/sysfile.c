@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -600,6 +601,8 @@ sys_mmap(void)
 
   // read mmap syscall arguments
   argaddr(0, &addr);
+  if (addr == 0)
+    addr = MMAPSTOP;
   argaddr(1, &len);
   argint(2, &prot);
   argint(3, &flags);
@@ -614,19 +617,19 @@ sys_mmap(void)
   for (i = 0; i < NVMA; i++) {
     if (p->mmaps[i].valid == 0)
       break;
+    addr -= p->mmaps[i].len;
   }
   if (i == NVMA)
     return -1;
 
   // update proc struct
   p->mmaps[i].valid = 1;
-  p->mmaps[i].addr = addr = p->sz;
+  p->mmaps[i].addr = addr = addr - len;
   p->mmaps[i].len = len;
   p->mmaps[i].offset = 0;
   p->mmaps[i].prot = prot;
   p->mmaps[i].flags = flags;
   p->mmaps[i].file = f;
-  p->sz += len;  // lazy memory allocation
   filedup(f);    // increase file reference count
 
   return addr;
