@@ -576,19 +576,17 @@ vmaunmap(pagetable_t pagetable, uint64 va, uint64 len, struct vma *vma)
 
     // write back to disk if dirty
     if ((*pte & PTE_D) && (vma->flags & MAP_SHARED)) {
-      begin_op();
-      ilock(vma->file->ip);
-
+      n = PGSIZE;
       off = a - vma->addr;
       rem = vma->file->ip->size - vma->offset;
-      if (off < rem) {
-        n = PGSIZE;
-        if (rem - off < PGSIZE)
-          n = rem - off;
-        if (vma->len - off < n)
-          n = vma->len - off;
-        writei(vma->file->ip, 1, a, vma->offset + off, n);
-      }
+      if (rem - off < PGSIZE)
+        n = rem - off;
+      if (vma->len - off < n)
+        n = vma->len - off;
+
+      begin_op();
+      ilock(vma->file->ip);
+      writei(vma->file->ip, 1, a, vma->offset + off, n);
       iunlock(vma->file->ip);
       end_op();
     }
