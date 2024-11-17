@@ -503,3 +503,167 @@ sys_pipe(void)
   }
   return 0;
 }
+
+int
+mmap_lazy_alloc(uint64 va)
+{
+  struct proc *p = myproc();
+  struct vma *a = 0;
+  char *mem;
+
+  // find associated virtual memory area
+  for (int i = 0; i < NVMA; i++) {
+    if (p->mmaps[i].valid && p->mmaps[i].addr <= va && va < p->mmaps[i].addr + p->mmaps[i].len) {
+      a = &p->mmaps[i];
+      break;
+    }
+  }
+  if (a == 0) {
+    return -1;
+  }
+
+  // allocate physical memory page
+  if ((mem = kalloc()) == 0)
+    return -1;
+  memset(mem, 0, PGSIZE);
+
+  // read file from disk to vma
+  struct inode *ip = a->file->ip;
+  va = PGROUNDDOWN(va);
+  ilock(ip);
+  readi(ip, 0, (uint64) mem, va - a->addr, PGSIZE);
+  iunlock(ip);
+
+  // set vm permission bits
+  int perm = PTE_U;
+  if (a->prot & PROT_READ)
+    perm |= PTE_R;
+  if (a->prot & PROT_WRITE)
+    perm |= PTE_W;
+  if (a->prot & PROT_EXEC)
+    perm |= PTE_X;
+  if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, perm) != 0) {
+    kfree(mem);
+    return -1;
+  }
+  return 0;
+}
+
+void
+vmaunmap(pagetable_t pagetable, uint64 va, uint64 len, struct vma *vma)
+{
+  uint64 a;
+  pte_t *pte;
+  uint off, n;
+
+  if((va % PGSIZE) != 0)
+    panic("vmaunmap: not aligned");
+
+  for (a = va; a < va + len; a += PGSIZE) {
+    if ((pte = walk(pagetable, a, 0)) == 0)
+      continue;
+    if ((*pte & PTE_V) == 0)
+      continue;
+    if (PTE_FLAGS(*pte) == PTE_V)
+      panic("vmaunmap: not a leaf");
+
+    // write back to disk if dirty
+    if ((*pte & PTE_D) && (vma->flags & MAP_SHARED)) {
+      begin_op();
+      ilock(vma->file->ip);
+
+      off = a - vma->addr;
+      if (off < vma->file->ip->size) {
+        n = PGSIZE;
+        if (vma->file->ip->size - off < PGSIZE)
+          n = vma->file->ip->size - off;
+        if (vma->len - off < n)
+          n = vma->len - off;
+        writei(vma->file->ip, 1, a, off, n);
+      }
+      iunlock(vma->file->ip);
+      end_op();
+    }
+    uint64 pa = PTE2PA(*pte);
+    kfree((void*) pa);
+    *pte = 0;
+  }
+}
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr, len;
+  int prot, flags, fd, i;
+  struct proc *p = myproc();
+  struct file *f;
+
+  // read mmap syscall arguments
+  argaddr(0, &addr);
+  argaddr(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  argint(4, &fd);
+  f = p->ofile[fd];
+
+  // check protection & flag bits
+  if (!f->writable && (prot & PROT_WRITE) && !(flags & MAP_PRIVATE))
+    return -1;
+
+  // find vma for memory-mapped file
+  for (i = 0; i < NVMA; i++) {
+    if (p->mmaps[i].valid == 0)
+      break;
+  }
+  if (i == NVMA)
+    return -1;
+
+  // update proc struct
+  p->mmaps[i].valid = 1;
+  p->mmaps[i].addr = addr = p->sz;
+  p->mmaps[i].len = len;
+  p->mmaps[i].offset = 0;
+  p->mmaps[i].prot = prot;
+  p->mmaps[i].flags = flags;
+  p->mmaps[i].file = f;
+  p->sz += len;  // lazy memory allocation
+  filedup(f);    // increase file reference count
+
+  return addr;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr, len;
+  struct proc *p = myproc();
+  struct vma *a = 0;
+
+  argaddr(0, &addr);
+  argaddr(1, &len);
+
+  for (int i = 0; i < NVMA; i++) {
+    if (p->mmaps[i].valid && p->mmaps[i].addr <= addr && addr < p->mmaps[i].addr + p->mmaps[i].len) {
+      a = &p->mmaps[i];
+      break;
+    }
+  }
+  if (a == 0) {
+    return -1;
+  }
+
+  vmaunmap(p->pagetable, addr, len, a);
+
+  // update proc struct
+  // assume either unmap at the start, or at the end, or the whole region
+  if (addr == a->addr && len == a->len) {
+    fileclose(a->file);
+    a->valid = 0;
+  } else {
+    if (addr == a->addr)
+      a->addr += len;
+    a->len -= len;
+  }
+
+  return 0;
+}
