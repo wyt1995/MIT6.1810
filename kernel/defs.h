@@ -238,5 +238,6 @@ void            net_rx(char *buf, int len);
 #endif
 
 #ifdef LAB_MMAP
+int             mappages_lazy(pagetable_t, uint64, uint64);
 int             mmap_lazy_alloc(uint64);
 #endif

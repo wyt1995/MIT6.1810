@@ -592,8 +592,36 @@ vmaunmap(pagetable_t pagetable, uint64 va, uint64 len, struct vma *vma)
     }
     uint64 pa = PTE2PA(*pte);
     kfree((void*) pa);
-    *pte = 0;
+    *pte = PTE_L;
   }
+}
+
+void
+vmaclean()
+{
+  uint64 va, end;
+  uint64 sz = 0;
+  struct proc *p = myproc();
+  pte_t *pte;
+
+  for (int i = 0; i < NVMA; i++) {
+    if (p->mmaps[i].valid) {
+      end = p->mmaps[i].addr + p->mmaps[i].len;
+      if (end > sz)
+        sz = end;
+    }
+  }
+  if (sz == 0) {
+    sz = p->sz;
+    for (va = p->sz; va > 0; va -= PGSIZE) {
+      pte = walk(p->pagetable, va, 0);
+      if (*pte & PTE_V) {
+        break;
+      }
+      sz = va;
+    }
+  }
+  p->sz = sz;
 }
 
 uint64
@@ -607,8 +635,6 @@ sys_mmap(void)
 
   // read mmap syscall arguments
   argaddr(0, &addr);
-  if (addr == 0)
-    addr = MMAPSTOP;
   argaddr(1, &len);
   len = PGROUNDUP(len);
   argint(2, &prot);
@@ -622,10 +648,9 @@ sys_mmap(void)
 
   // find vma for memory-mapped file
   for (int i = 0; i < NVMA; i++) {
-    if (p->mmaps[i].valid == 0 && vma == 0) {
+    if (p->mmaps[i].valid == 0) {
       vma = &p->mmaps[i];
-    } else if (p->mmaps[i].valid) {
-      addr = PGROUNDDOWN(p->mmaps[i].addr);
+      break;
     }
   }
   if (vma == 0)
@@ -633,13 +658,15 @@ sys_mmap(void)
 
   // update proc struct
   vma->valid = 1;
-  vma->addr = addr = addr - len;
+  vma->addr = addr = p->sz;
   vma->len = len;
   vma->offset = 0;
   vma->prot = prot;
   vma->flags = flags;
   vma->file = f;
   filedup(f);    // increase file reference count
+  p->sz += len;  // lazy memory allocation
+  mappages_lazy(p->pagetable, addr, len);
 
   return addr;
 }
@@ -671,6 +698,7 @@ sys_munmap(void)
   if (addr == a->addr && len == a->len) {
     fileclose(a->file);
     a->valid = 0;
+    vmaclean();
   } else {
     if (addr == a->addr) {
       a->addr += len;

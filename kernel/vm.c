@@ -163,10 +163,30 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+    *pte &= ~PTE_L;
     if(a == last)
       break;
     a += PGSIZE;
     pa += PGSIZE;
+  }
+  return 0;
+}
+
+int
+mappages_lazy(pagetable_t pagetable, uint64 va, uint64 size)
+{
+  uint64 a, last;
+  pte_t *pte;
+
+  if ((va % PGSIZE) != 0)
+    panic("mappages lazy: va not aligned");
+  if ((size % PGSIZE) != 0)
+    panic("mappages lazy: size not aligned");
+
+  last = va + size - PGSIZE;
+  for (a = va; a <= last; a += PGSIZE) {
+    pte = walk(pagetable, a, 0);
+    *pte = PTE_L;
   }
   return 0;
 }
@@ -186,6 +206,8 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
+    if(*pte & PTE_L)
+      continue;
     if((*pte & PTE_V) == 0)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
@@ -320,8 +342,12 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
+    if((*pte & PTE_V) == 0 && (*pte & PTE_L) == 0)
       panic("uvmcopy: page not present");
+    if (*pte & PTE_L) {
+      mappages_lazy(new, i, PGSIZE);
+      continue;
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
